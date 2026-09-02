@@ -49,6 +49,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Bootstrap git and GitHub CLI
         run: |
