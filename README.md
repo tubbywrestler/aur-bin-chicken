@@ -67,9 +67,12 @@ two jobs:
    bin package's own), `pkgrel` (reset to `1`), and `sha256sums` (the real hash of
    the artifact just built — not a placeholder for `updpkgsums` to fill in later).
    Regenerates `.SRCINFO`, commits, and pushes to `master`.
-7. Regenerates a second, disposable **orphan `aur` branch** containing only
-   `PKGBUILD`, `.SRCINFO`, and `.gitignore` — no `.github/` — and force-pushes it.
-   This is the branch you actually push to AUR (see below for why).
+7. Updates a second **`aur` branch** containing only `PKGBUILD`, `.SRCINFO`, and
+   `.gitignore` — no `.github/` — built as a normal incremental commit on top of
+   whatever that branch already contains (an orphan commit only the very first
+   time it's created), and pushes it. This is the branch you actually push to AUR
+   (see below for why, and why it must never be regenerated from scratch after
+   the first run).
 
 A job in a called reusable workflow runs with the *caller's* `github.repository`/
 `GITHUB_TOKEN` context, not `aur-bin-chicken`'s — that's what makes `gh release
@@ -162,10 +165,19 @@ Read these first:
 filename whitelist, just a flat-files-only rule. `master` has `.github/workflows/`
 on it (required for GitHub Actions to even discover the workflow), so it can never
 be pushed to AUR directly. The `aur` branch the workflow maintains (see
-[How it works](#how-it-works), step 7) exists specifically to solve this: it's
-regenerated from scratch on every build — not merged or rebased from `master` — so
-it never contains anything but the flat files AUR needs, and it can never drift or
-conflict, since it never reads its own previous state.
+[How it works](#how-it-works), step 7) exists specifically to solve this: it only
+ever contains the flat files AUR needs.
+
+**Important:** that branch is built as a normal incremental commit on top of
+whatever it already contains, never regenerated as a fresh orphan after its first
+commit. AUR's server *also* rejects non-fast-forward pushes to `master` — it will
+not accept rewritten history, even via `--force`. An earlier version of this
+workflow regenerated the `aur` branch from scratch on every run, which seemed
+simpler and safer (no merge conflicts possible) since AUR doesn't care about git
+history — but it produces a branch with no shared ancestry between runs, so every
+push after the first one gets rejected server-side with `denying non-fast-forward
+... hook declined to update refs/heads/master`. Learned this the hard way; don't
+reintroduce it.
 
 ### One-time per-package setup
 
@@ -189,17 +201,21 @@ git fetch origin aur:aur -f
 git push aur aur:master
 ```
 
-- **First push** (standing up the package for the first time): no `--force`
-  needed — AUR's repo is empty, so this is a fast-forward. This single push *is*
-  the act of creating/registering the package on AUR; there's no separate "submit"
-  button or step.
-- **Every push after that**: add `--force`. CI regenerates the `aur` branch from
-  scratch on every build with no shared history with the previous version, so it's
-  never a fast-forward:
-  ```bash
-  git fetch origin aur:aur -f
-  git push aur aur:master --force
-  ```
+**First push** (standing up the package for the first time): AUR's repo is empty,
+so this is trivially a fast-forward. This single push *is* the act of creating/
+registering the package on AUR; there's no separate "submit" button or step.
+
+**Every push after that**: since the `aur` branch now has real, connected history
+(each build's commit descends from the last), a plain push is *still* a
+fast-forward — no `--force` ever needed, and none should be used. If you ever see
+`denying non-fast-forward` / `hook declined to update refs/heads/master` here, it
+means your local `aur` branch has drifted from what's actually on AUR (e.g. after
+manually editing the repo, or if a previous version of this workflow's bug
+regenerated it as an orphan) — resolve that by rebuilding `aur` on top of AUR's
+actual current tip (`git fetch aur master:aur-real`, reapply
+`PKGBUILD`/`.SRCINFO`/`.gitignore` from `master` on top, commit, then force-update
+just the *local/GitHub* copy of `aur`, never AUR itself), rather than reaching for
+`--force` on the push to AUR.
 
 Do **not** `git push -u`/`--set-upstream` this branch to the `aur` remote. Its real
 source of truth is GitHub (`origin/aur`, written by CI) — AUR is a one-way publish
@@ -217,6 +233,16 @@ than assuming the push failed.
 These were all discovered the hard way while building this pipeline — noted here so
 nobody has to rediscover them:
 
+- **AUR rejects non-fast-forward pushes to `master` — never regenerate the `aur`
+  branch as a fresh orphan after its first commit.** It's tempting (and was our
+  first implementation): AUR doesn't care about git history, so why not just wipe
+  and recreate the branch every run? Because AUR's server independently enforces
+  fast-forward-only updates regardless of history *content* — an orphan commit has
+  no shared ancestry with the previous one, so the push is rejected with `denying
+  non-fast-forward` / `hook declined to update refs/heads/master`, even with
+  `--force` on the client side (that only overrides local safety checks, not the
+  server's). The `aur` branch must be built incrementally: fetch it if it exists,
+  commit the current `PKGBUILD`/`.SRCINFO`/`.gitignore` on top, push normally.
 - **`archlinux:base-devel` ships neither `git` nor `gh`.** Both are installed
   explicitly, up front, before anything else — they can't wait for "install the base
   package's own `makedepends`" since that's not guaranteed to include either.
