@@ -87,6 +87,23 @@ jobs:
             su builder -c 'cd aur-src && makepkg --nocheck'
           fi
 
+      - name: Read actual built version
+        id: built
+        run: |
+          # For VCS packages with a dynamic pkgver() (git describe, etc.), makepkg
+          # rewrites PKGBUILD's pkgver in place if it computed something different
+          # from what was checked in - so re-read it post-build rather than
+          # trusting the check job's pre-build value, to keep the release tag,
+          # artifact filename, and -bin PKGBUILD's source= URL self-consistent.
+          # For ordinary static-pkgver packages this just reproduces the same
+          # value the check job already found.
+          cd aur-src
+          pkgver=$(grep -Po '^pkgver=\K.*' PKGBUILD)
+          pkgrel=$(grep -Po '^pkgrel=\K.*' PKGBUILD)
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
+          echo "tag=${pkgver}-${pkgrel}" >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,10 +112,10 @@ jobs:
           # options=(!debug), makepkg also produces a debug package alongside the
           # real one, which nothing in the -bin PKGBUILD ever references.
           mapfile -t assets < <(ls aur-src/*.pkg.tar.zst | grep -v -- '-debug-')
-          gh release create "${{ needs.check.outputs.tag }}" "${assets[@]}" \
+          gh release create "${{ steps.built.outputs.tag }}" "${assets[@]}" \
             --repo "${{ github.repository }}" \
-            --title "${{ needs.check.outputs.tag }}" \
-            --notes "Automated build of ${{ inputs.aur_pkgbase }} ${{ needs.check.outputs.tag }}"
+            --title "${{ steps.built.outputs.tag }}" \
+            --notes "Automated build of ${{ inputs.aur_pkgbase }} ${{ steps.built.outputs.tag }}"
 
       - name: Checkout bin package repo
         uses: actions/checkout@v7
@@ -107,8 +124,8 @@ jobs:
 
       - name: Bump bin package PKGBUILD
         env:
-          NEW_PKGVER: ${{ needs.check.outputs.pkgver }}
-          NEW_PKGREL_SRC: ${{ needs.check.outputs.pkgrel }}
+          NEW_PKGVER: ${{ steps.built.outputs.pkgver }}
+          NEW_PKGREL_SRC: ${{ steps.built.outputs.pkgrel }}
         run: |
           artifact=$(ls aur-src/*.pkg.tar.zst | grep -v -- '-debug-' | head -n1)
           sha=$(sha256sum "$artifact" | awk '{print $1}')
@@ -133,7 +150,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
           if ! git diff --cached --quiet; then
-            git commit -m "${{ needs.check.outputs.tag }}"
+            git commit -m "${{ steps.built.outputs.tag }}"
             git push
           fi
 
@@ -161,7 +178,7 @@ jobs:
           done
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "${{ needs.check.outputs.tag }}"
+            git commit -m "${{ steps.built.outputs.tag }}"
             git push origin aur
           fi
           git checkout master
