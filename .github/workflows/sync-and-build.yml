@@ -1,0 +1,113 @@
+name: Sync and build AUR bin package
+
+on:
+  workflow_call:
+    inputs:
+      aur_pkgbase:
+        description: "Name of the AUR base package to track and build"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      pkgver: ${{ steps.version.outputs.pkgver }}
+      pkgrel: ${{ steps.version.outputs.pkgrel }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_new: ${{ steps.exists.outputs.is_new }}
+    steps:
+      - name: Clone AUR base package
+        run: git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src
+
+      - name: Read pkgver/pkgrel
+        id: version
+        run: |
+          pkgver=$(grep -Po '^pkgver=\K.*' aur-src/PKGBUILD)
+          pkgrel=$(grep -Po '^pkgrel=\K.*' aur-src/PKGBUILD)
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
+          echo "tag=${pkgver}-${pkgrel}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version is already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.is_new == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Bootstrap git and GitHub CLI
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed git github-cli
+
+      - name: Clone AUR base package
+        run: git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src
+
+      - name: Install base package dependencies
+        run: |
+          cd aur-src
+          source PKGBUILD
+          pacman -S --noconfirm --needed "${makedepends[@]}" "${depends[@]}"
+
+      - name: Create unprivileged build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build package
+        run: su builder -c 'cd aur-src && makepkg'
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.check.outputs.tag }}" aur-src/*.pkg.tar.zst \
+            --repo "${{ github.repository }}" \
+            --title "${{ needs.check.outputs.tag }}" \
+            --notes "Automated build of ${{ inputs.aur_pkgbase }} ${{ needs.check.outputs.tag }}"
+
+      - name: Checkout bin package repo
+        uses: actions/checkout@v4
+        with:
+          path: bin-repo
+
+      - name: Bump bin package PKGBUILD
+        env:
+          NEW_PKGVER: ${{ needs.check.outputs.pkgver }}
+          NEW_PKGREL_SRC: ${{ needs.check.outputs.pkgrel }}
+        run: |
+          artifact=$(ls aur-src/*.pkg.tar.zst | head -n1)
+          sha=$(sha256sum "$artifact" | awk '{print $1}')
+          cd bin-repo
+          sed -i "s/^pkgver=.*/pkgver=${NEW_PKGVER}/" PKGBUILD
+          sed -i "s/^_pkgrel_src=.*/_pkgrel_src=${NEW_PKGREL_SRC}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${sha}')/" PKGBUILD
+          chown -R builder:builder .
+          su builder -c "makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Commit and push bin package bump
+        run: |
+          cd bin-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "${{ needs.check.outputs.tag }}"
+            git push
+          fi
