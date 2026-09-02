@@ -132,3 +132,21 @@ jobs:
             git commit -m "${{ needs.check.outputs.tag }}"
             git push
           fi
+
+      - name: Update aur branch (flat files only, for AUR push)
+        run: |
+          cd bin-repo
+          # AUR's git hooks reject any push containing a subdirectory, and this
+          # repo's master has .github/workflows/. Maintain a separate orphan
+          # branch with just the files AUR needs, regenerated from scratch every
+          # run (not merged/rebased) so it can never drift or conflict.
+          git checkout --orphan aur
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git clean -fdx >/dev/null
+          for f in PKGBUILD .SRCINFO .gitignore; do
+            git checkout master -- "$f" 2>/dev/null || true
+          done
+          git add -A
+          git commit -m "${{ needs.check.outputs.tag }}"
+          git push origin aur --force
+          git checkout master
