@@ -121,6 +121,7 @@ Say `foo` is an existing AUR package (yours or someone else's) and you want
    arch=('x86_64')
    url="..."
    license=(...)
+   options=('!debug')   # nothing to strip - the binaries are already built
    provides=('foo')
    conflicts=('foo')
    depends=(...)   # foo's runtime depends only - no makedepends, nothing compiles
@@ -235,6 +236,14 @@ nobody has to rediscover them:
 - **`makepkg` refuses to run as root, even for `--printsrcinfo`.** There's no flag
   to override this for metadata-only use; the unprivileged `builder` user is
   required for every `makepkg` invocation, not just full builds.
+- **Always set `options=('!debug')` in the `-bin` PKGBUILD.** Without it, `makepkg`
+  tries to auto-generate a companion `-debug` package by extracting debug symbols
+  from binaries that are already stripped (they came pre-built from the base
+  package) — this fails on every file with harmless-looking but noisy
+  `gdb-add-index: No debugging symbols` errors. Separately, the *base* package's own
+  build can also produce a `*-debug-*.pkg.tar.zst` if its own `PKGBUILD` doesn't set
+  this — the workflow's release/hashing steps explicitly filter those out, since the
+  `-bin` PKGBUILD's `source=` only ever references the non-debug artifact.
 
 ## Files each `-bin` repo needs
 
