@@ -7,6 +7,11 @@ on:
         description: "Name of the AUR base package to track and build"
         required: true
         type: string
+      run_tests:
+        description: "Run the base package's own check() step (makepkg without --nocheck)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -73,7 +78,14 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
       - name: Build package
-        run: su builder -c 'cd aur-src && makepkg'
+        env:
+          RUN_TESTS: ${{ inputs.run_tests }}
+        run: |
+          if [ "$RUN_TESTS" = "true" ]; then
+            su builder -c 'cd aur-src && makepkg'
+          else
+            su builder -c 'cd aur-src && makepkg --nocheck'
+          fi
 
       - name: Publish release
         env:
