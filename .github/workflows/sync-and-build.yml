@@ -91,13 +91,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ needs.check.outputs.tag }}" aur-src/*.pkg.tar.zst \
+          # Exclude any *-debug-*.pkg.tar.zst - if the base PKGBUILD doesn't set
+          # options=(!debug), makepkg also produces a debug package alongside the
+          # real one, which nothing in the -bin PKGBUILD ever references.
+          mapfile -t assets < <(ls aur-src/*.pkg.tar.zst | grep -v -- '-debug-')
+          gh release create "${{ needs.check.outputs.tag }}" "${assets[@]}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.check.outputs.tag }}" \
             --notes "Automated build of ${{ inputs.aur_pkgbase }} ${{ needs.check.outputs.tag }}"
 
       - name: Checkout bin package repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: bin-repo
 
@@ -106,7 +110,7 @@ jobs:
           NEW_PKGVER: ${{ needs.check.outputs.pkgver }}
           NEW_PKGREL_SRC: ${{ needs.check.outputs.pkgrel }}
         run: |
-          artifact=$(ls aur-src/*.pkg.tar.zst | head -n1)
+          artifact=$(ls aur-src/*.pkg.tar.zst | grep -v -- '-debug-' | head -n1)
           sha=$(sha256sum "$artifact" | awk '{print $1}')
           cd bin-repo
           sed -i "s/^pkgver=.*/pkgver=${NEW_PKGVER}/" PKGBUILD
