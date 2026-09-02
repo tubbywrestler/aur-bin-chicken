@@ -141,16 +141,27 @@ jobs:
         run: |
           cd bin-repo
           # AUR's git hooks reject any push containing a subdirectory, and this
-          # repo's master has .github/workflows/. Maintain a separate orphan
-          # branch with just the files AUR needs, regenerated from scratch every
-          # run (not merged/rebased) so it can never drift or conflict.
-          git checkout --orphan aur
-          git rm -rf --cached . >/dev/null 2>&1 || true
-          git clean -fdx >/dev/null
+          # repo's master has .github/workflows/, so a separate branch with just
+          # the files AUR needs is required. IMPORTANT: AUR's server also rejects
+          # non-fast-forward pushes to master (it will not accept rewritten
+          # history), so this branch must be built incrementally on top of
+          # whatever it already contains - never regenerated as a fresh orphan
+          # after the first run, or every subsequent push to AUR breaks with
+          # "denying non-fast-forward" / "hook declined to update refs/heads/master".
+          if git ls-remote --exit-code --heads origin aur >/dev/null 2>&1; then
+            git fetch origin aur
+            git checkout -B aur origin/aur
+          else
+            git checkout --orphan aur
+            git rm -rf --cached . >/dev/null 2>&1 || true
+            git clean -fdx >/dev/null
+          fi
           for f in PKGBUILD .SRCINFO .gitignore; do
             git checkout master -- "$f" 2>/dev/null || true
           done
           git add -A
-          git commit -m "${{ needs.check.outputs.tag }}"
-          git push origin aur --force
+          if ! git diff --cached --quiet; then
+            git commit -m "${{ needs.check.outputs.tag }}"
+            git push origin aur
+          fi
           git checkout master
