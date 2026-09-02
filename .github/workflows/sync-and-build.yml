@@ -101,7 +101,11 @@ jobs:
           sed -i "s/^_pkgrel_src=.*/_pkgrel_src=${NEW_PKGREL_SRC}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('${sha}')/" PKGBUILD
-          chown -R builder:builder .
+          # Only chown the files makepkg needs to touch - never .git, or the
+          # next step's plain (root) git commands break with "not in a git
+          # directory" due to git's dubious-ownership check.
+          touch .SRCINFO
+          chown builder:builder PKGBUILD .SRCINFO
           su builder -c "makepkg --printsrcinfo > .SRCINFO"
 
       - name: Commit and push bin package bump
