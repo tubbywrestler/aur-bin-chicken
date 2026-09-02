@@ -243,6 +243,15 @@ nobody has to rediscover them:
   `--force` on the client side (that only overrides local safety checks, not the
   server's). The `aur` branch must be built incrementally: fetch it if it exists,
   commit the current `PKGBUILD`/`.SRCINFO`/`.gitignore` on top, push normally.
+- **VCS packages with a dynamic `pkgver()` function** (version computed via
+  `git describe` etc. at build time, e.g. `cangaroo`) can cause `makepkg` to rewrite
+  the checked-out `PKGBUILD`'s `pkgver` in place if it computes something newer
+  than what's checked in on AUR. The workflow re-reads `pkgver`/`pkgrel` from
+  `aur-src/PKGBUILD` *after* the build (`Read actual built version` step) rather
+  than trusting the `check` job's pre-build values, so the release tag, the
+  uploaded artifact's filename, and the `-bin` PKGBUILD's `source=` URL always
+  agree — for ordinary static-`pkgver` packages this just reproduces the same
+  value the `check` job already found, so it's a no-op there.
 - **`archlinux:base-devel` ships neither `git` nor `gh`.** Both are installed
   explicitly, up front, before anything else — they can't wait for "install the base
   package's own `makedepends`" since that's not guaranteed to include either.
