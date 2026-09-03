@@ -7,6 +7,18 @@ on:
         description: "Name of the AUR base package to track and build"
         required: true
         type: string
+      source_url:
+        description: >
+          Override git URL to clone the base package from, instead of
+          https://aur.archlinux.org/<aur_pkgbase>.git. For cases where a real
+          AUR package needs a fix its maintainer hasn't taken yet and you're
+          not a co-maintainer able to push there yourself - point this at your
+          own mirror with the fix applied instead. Not a substitute for
+          getting the fix upstreamed; aur_pkgbase is still used for release
+          tags and is expected to match the mirror's own pkgname.
+        required: false
+        type: string
+        default: ""
       run_tests:
         description: "Run the base package's own check() step (makepkg without --nocheck)"
         required: false
@@ -26,7 +38,10 @@ jobs:
       is_new: ${{ steps.exists.outputs.is_new }}
     steps:
       - name: Clone AUR base package
-        run: git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src
+        run: |
+          url="${{ inputs.source_url }}"
+          [ -n "$url" ] || url="https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git"
+          git clone --depth 1 "$url" aur-src
 
       - name: Read pkgver/pkgrel
         id: version
@@ -86,7 +101,10 @@ jobs:
           '
 
       - name: Clone AUR base package
-        run: su builder -c 'git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src'
+        run: |
+          url="${{ inputs.source_url }}"
+          [ -n "$url" ] || url="https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git"
+          su builder -c "git clone --depth 1 \"$url\" aur-src"
 
       - name: Install base package dependencies
         run: |
