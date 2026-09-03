@@ -98,8 +98,9 @@ invoked the workflow, with zero extra plumbing.
 
 | Input | Required | Default | Meaning |
 |---|---|---|---|
-| `aur_pkgbase` | yes | — | The AUR `pkgbase` to track and build, e.g. `can-utils`, `elmerfem-base`, `gama`. |
+| `aur_pkgbase` | yes | — | The AUR `pkgbase` to track and build, e.g. `can-utils`, `elmerfem-base`, `gama`. Still used for release tags even when `source_url` overrides where the clone comes from. |
 | `run_tests` | no | `true` | Whether to let the base package's own `check()` run. Set `false` to build with `makepkg --nocheck` — useful for slow/flaky suites (MPI-heavy ones especially) where you're trusting upstream's own testing rather than re-running it on every CI build. |
+| `source_url` | no | *(AUR URL for `aur_pkgbase`)* | Override git URL to clone the base package from. For when the real AUR package needs a fix its maintainer hasn't taken yet and you're not a co-maintainer able to push there yourself — see [Building from a mirror](#building-from-a-mirror-when-you-cant-push-the-real-fix-upstream). |
 
 ## Setting up a new `<foo>-bin` package
 
@@ -158,7 +159,37 @@ Say `foo` is an existing AUR package (yours or someone else's) and you want
 6. Once green, `gh release list --repo <you>/foo-bin` shows the new tag, and an
    `aur` branch now exists on the repo containing just the three flat files.
 
-## Publishing to AUR
+## Building from a mirror when you can't push the real fix upstream
+
+Sometimes the real AUR base package needs a fix (doesn't build on a current
+compiler, has a bug, etc.) and you're not a co-maintainer able to push it there
+yourself. Example: `elmerfem-gui` fails to compile under GCC 16 (bundled Netgen
+relies on a pre-C++20 `istream::operator>>(char*)` overload), the fix is a one-line
+`CMAKE_CXX_STANDARD` pin, but pushing it requires maintainer access this account
+doesn't have.
+
+For this, `source_url` overrides which git repo the `check`/`build` jobs clone from,
+instead of the AUR URL `aur_pkgbase` would otherwise construct:
+
+```yaml
+with:
+  aur_pkgbase: elmerfem-gui   # still used for release tags
+  source_url: https://github.com/tubbywrestler/elmerfem-gui.git
+```
+
+The mirror repo itself is just the AUR package's content (PKGBUILD, `.SRCINFO`, any
+patches/desktop files it references) plus the fix, pushed to a plain GitHub repo —
+no `.github/workflows/`, no `aur` branch, nothing pipeline-specific; it's purely
+something for the `build` job to clone instead of the real AUR repo. If you started
+from a local clone of the real AUR package, add the mirror as a second remote and
+push there specifically — **never rename or repoint the remote that points at the
+real AUR repo**, and never push your fix to it if you don't have maintainer access.
+The convention used so far: keep the real AUR remote as `upstream` (read-only,
+for watching what the actual maintainer does) and point `origin` at your own
+mirror (what you actually push local work to).
+
+This is a workaround, not a substitute for getting the fix accepted upstream —
+revert to the real AUR URL (drop `source_url`) once it lands there.
 
 Read these first:
 - [Arch Wiki: Arch User Repository](https://wiki.archlinux.org/title/Arch_User_Repository)
