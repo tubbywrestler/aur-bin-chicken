@@ -40,7 +40,10 @@ two jobs:
 
 1. Clones the base package's real AUR git repo
    (`https://aur.archlinux.org/<aur_pkgbase>.git`).
-2. `grep`s its `PKGBUILD` for `pkgver=`/`pkgrel=` and computes `tag = pkgver-pkgrel`.
+2. Sources its `PKGBUILD` (not `grep` — some PKGBUILDs compute `pkgver` via shell
+   expansion rather than a plain literal, e.g. `cloudcompare`'s
+   `pkgver="${_fragment###tag=v}"`, which a regex can't evaluate) to read
+   `pkgver`/`pkgrel` and computes `tag = pkgver-pkgrel`.
 3. Runs `gh release view <tag>` against the *calling* `-bin` repo. If that release
    already exists, this version has already been built (`is_new=false`) and the
    `build` job is skipped entirely. This is what makes the whole pipeline stateless
@@ -49,25 +52,37 @@ two jobs:
 
 ### Job `build` (only runs when `is_new == 'true'`, `container: archlinux:base-devel`)
 
-1. Bootstraps `git` and `github-cli` — the `archlinux:base-devel` image ships
-   **neither** by default, so both are installed explicitly before anything else
-   can happen.
-2. Clones the base package fresh, sources its `PKGBUILD` to read `depends`/
-   `makedepends`, and `pacman -S`s them.
-3. Creates an unprivileged `builder` user (`makepkg` refuses to run as root — this
-   also means any test suite that shells out to `mpirun` etc. runs as a normal user,
-   as it should).
-4. Builds with `makepkg` (or `makepkg --nocheck` if `run_tests: false` — see
+1. Bootstraps `git`, `github-cli`, and `sudo` — the `archlinux:base-devel` image
+   ships **none** of these by default, so all three are installed explicitly before
+   anything else can happen.
+2. Creates an unprivileged `builder` user with a throwaway `NOPASSWD` sudo rule
+   (`makepkg` and the AUR helper below both refuse to run as root; the NOPASSWD
+   rule is fine only because this container is destroyed at the end of the run).
+3. Bootstraps `yay` as `builder`, from the prebuilt `yay-bin` package (a binary
+   download, no compilation needed).
+4. Clones the base package fresh as `builder`, sources its `PKGBUILD` to read
+   `depends`/`makedepends`, and installs them via `yay -S`, not plain `pacman -S` —
+   some base packages depend on AUR-only packages themselves (`cloudcompare` needs
+   `qt5-websockets`/`mpir`/`fbx-sdk`; `cangaroo` needs `qt5-charts`), which pacman
+   alone can't resolve. `yay` builds those from AUR the same way a human running it
+   manually would. This is a deliberate expansion of trust — CI now auto-builds
+   whatever AUR packages a base package's dependencies reference, recursively,
+   unattended — and can make build times less predictable for deep AUR dependency
+   chains, but has been fine for the small/self-contained packages needed so far.
+5. Builds with `makepkg` (or `makepkg --nocheck` if `run_tests: false` — see
    [Inputs](#inputs)) as `builder`. This runs the base package's own
    `prepare()`/`build()`/`check()`/`package()` completely untouched.
-5. Publishes the resulting `.pkg.tar.zst` as a GitHub Release tagged `<tag>` in the
+6. Re-reads `pkgver`/`pkgrel` from the (possibly now-modified — see
+   [Troubleshooting](#troubleshooting--known-gotchas)) `PKGBUILD` post-build, rather
+   than trusting the `check` job's pre-build values.
+7. Publishes the resulting `.pkg.tar.zst` as a GitHub Release tagged `<tag>` in the
    calling `-bin` repo.
-6. Checks out the `-bin` repo itself and bumps its own `PKGBUILD` in place:
+8. Checks out the `-bin` repo itself and bumps its own `PKGBUILD` in place:
    `pkgver`, `_pkgrel_src` (the *base* package's `pkgrel`, kept distinct from the
    bin package's own), `pkgrel` (reset to `1`), and `sha256sums` (the real hash of
    the artifact just built — not a placeholder for `updpkgsums` to fill in later).
    Regenerates `.SRCINFO`, commits, and pushes to `master`.
-7. Updates a second **`aur` branch** containing only `PKGBUILD`, `.SRCINFO`, and
+9. Updates a second **`aur` branch** containing only `PKGBUILD`, `.SRCINFO`, and
    `.gitignore` — no `.github/` — built as a normal incremental commit on top of
    whatever that branch already contains (an orphan commit only the very first
    time it's created), and pushes it. This is the branch you actually push to AUR
