@@ -31,8 +31,11 @@ jobs:
       - name: Read pkgver/pkgrel
         id: version
         run: |
-          pkgver=$(grep -Po '^pkgver=\K.*' aur-src/PKGBUILD)
-          pkgrel=$(grep -Po '^pkgrel=\K.*' aur-src/PKGBUILD)
+          # Source rather than grep - some PKGBUILDs compute pkgver via shell
+          # expansion (e.g. cloudcompare's pkgver="${_fragment###tag=v}") rather
+          # than a plain literal, which a regex can't evaluate.
+          cd aur-src
+          source PKGBUILD
           echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
           echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
           echo "tag=${pkgver}-${pkgrel}" >> "$GITHUB_OUTPUT"
@@ -61,21 +64,46 @@ jobs:
       - name: Bootstrap git and GitHub CLI
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed git github-cli
-
-      - name: Clone AUR base package
-        run: git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src
-
-      - name: Install base package dependencies
-        run: |
-          cd aur-src
-          source PKGBUILD
-          pacman -S --noconfirm --needed "${makedepends[@]}" "${depends[@]}"
+          pacman -S --noconfirm --needed git github-cli sudo
 
       - name: Create unprivileged build user
         run: |
+          # Needed before dependency resolution now, not just before the build -
+          # both the AUR helper bootstrap and makepkg itself refuse to run as root.
+          # NOPASSWD sudo is fine here only because this container is destroyed
+          # at the end of the run.
           useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Bootstrap AUR helper (yay)
+        run: |
+          su builder -c '
+            cd ~
+            git clone -q https://aur.archlinux.org/yay-bin.git
+            cd yay-bin
+            makepkg -si --noconfirm
+          '
+
+      - name: Clone AUR base package
+        run: su builder -c 'git clone --depth 1 "https://aur.archlinux.org/${{ inputs.aur_pkgbase }}.git" aur-src'
+
+      - name: Install base package dependencies
+        run: |
+          # Use yay, not plain pacman - some base packages depend on AUR-only
+          # packages themselves (e.g. cloudcompare needs qt5-websockets, mpir,
+          # fbx-sdk; cangaroo needs qt5-charts), which pacman alone can't resolve.
+          # yay builds those from AUR the same way a human running it manually
+          # would; this is a deliberate expansion of trust (CI now auto-builds
+          # whatever AUR packages a base package's deps reference, recursively,
+          # unattended) and can make build times less predictable for deep AUR
+          # dependency chains - acceptable for the small/self-contained packages
+          # seen so far.
+          su builder -c '
+            cd aur-src
+            source PKGBUILD
+            yay -S --noconfirm --needed "${makedepends[@]}" "${depends[@]}"
+          '
 
       - name: Build package
         env:
@@ -98,8 +126,7 @@ jobs:
           # For ordinary static-pkgver packages this just reproduces the same
           # value the check job already found.
           cd aur-src
-          pkgver=$(grep -Po '^pkgver=\K.*' PKGBUILD)
-          pkgrel=$(grep -Po '^pkgrel=\K.*' PKGBUILD)
+          source PKGBUILD
           echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
           echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
           echo "tag=${pkgver}-${pkgrel}" >> "$GITHUB_OUTPUT"
