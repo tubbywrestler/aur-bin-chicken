@@ -178,7 +178,11 @@ jobs:
           sed -i "s/^pkgver=.*/pkgver=${NEW_PKGVER}/" PKGBUILD
           sed -i "s/^_pkgrel_src=.*/_pkgrel_src=${NEW_PKGREL_SRC}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i "s/^sha256sums=.*/sha256sums=('${sha}')/" PKGBUILD
+          # Match sha256sums= or an arch-suffixed sha256sums_x86_64= etc,
+          # preserving whichever exact field name is present - needed for
+          # multi-arch PKGBUILDs (e.g. can-utils-bin's armv7h variant) without
+          # changing behavior for every other consumer's plain sha256sums=.
+          sed -i -E "s/^(sha256sums[A-Za-z0-9_]*)=.*/\1=('${sha}')/" PKGBUILD
           # makepkg needs write access to the directory itself (even in
           # --printsrcinfo mode) plus the two files it touches. Use chmod,
           # not chown - changing ownership of the worktree top-level
