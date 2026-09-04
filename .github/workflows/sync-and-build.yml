@@ -157,10 +157,19 @@ jobs:
           # options=(!debug), makepkg also produces a debug package alongside the
           # real one, which nothing in the -bin PKGBUILD ever references.
           mapfile -t assets < <(ls aur-src/*.pkg.tar.zst | grep -v -- '-debug-')
-          gh release create "${{ steps.built.outputs.tag }}" "${assets[@]}" \
-            --repo "${{ github.repository }}" \
-            --title "${{ steps.built.outputs.tag }}" \
-            --notes "Automated build of ${{ inputs.aur_pkgbase }} ${{ steps.built.outputs.tag }}"
+          tag="${{ steps.built.outputs.tag }}"
+          # A multi-arch -bin package (e.g. can-utils-bin) may have another,
+          # independently-triggered workflow publishing a different arch's asset
+          # under this same tag - if it got there first, upload into that release
+          # instead of failing on "already exists".
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "${{ github.repository }}" \
+              --title "$tag" \
+              --notes "Automated build of ${{ inputs.aur_pkgbase }} ${tag}"
+          fi
 
       - name: Checkout bin package repo
         uses: actions/checkout@v7
