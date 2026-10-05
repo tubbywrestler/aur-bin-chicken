@@ -126,6 +126,11 @@ jobs:
       - name: Build package
         env:
           RUN_TESTS: ${{ inputs.run_tests }}
+          # rustc has been observed stack-overflowing (SIGSEGV) on deeply
+          # nested generics/macros in some packages' release builds (e.g.
+          # open-cad-studio); harmless to set unconditionally for every
+          # package built through this workflow, Rust or not.
+          RUST_MIN_STACK: 16777216
         run: |
           if [ "$RUN_TESTS" = "true" ]; then
             su builder -c 'cd aur-src && makepkg'
