@@ -24,6 +24,17 @@ on:
         required: false
         type: boolean
         default: true
+      disable_debug:
+        description: >
+          Turn off makepkg's `debug` option for the build (sets !debug in
+          /etc/makepkg.conf). Stops makepkg adding -C debuginfo=2 to Rust
+          builds, which can get rustc OOM-killed (SIGKILL) on very large
+          crates (e.g. open-cad-studio). Debug packages are discarded by this
+          workflow anyway. A PKGBUILD that lists `debug` in options= itself
+          still wins.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -122,6 +133,13 @@ jobs:
             source PKGBUILD
             yay -S --noconfirm --needed "${makedepends[@]}" "${depends[@]}"
           '
+
+      - name: Disable makepkg debug option
+        if: inputs.disable_debug
+        run: |
+          sed -i -E '/^OPTIONS=/ s/(^|[ (])debug([ )])/\1!debug\2/' /etc/makepkg.conf
+          grep '^OPTIONS=' /etc/makepkg.conf
+          grep -qE '^OPTIONS=.*[ (]!debug[ )]' /etc/makepkg.conf
 
       - name: Build package
         env:
